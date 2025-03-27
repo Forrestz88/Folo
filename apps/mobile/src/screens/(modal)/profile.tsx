@@ -1,23 +1,20 @@
 import type { FeedViewType } from "@follow/constants"
-import { Fragment, useCallback, useEffect, useMemo } from "react"
+import { cn } from "@follow/utils"
+import { List } from "@infinite-list/list"
+import { ScrollView } from "@infinite-list/scroller"
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react"
 import {
   ActivityIndicator,
-  FlatList,
+  Animated as RNAnimated,
   Image,
   Share,
   Text,
   TouchableOpacity,
   View,
 } from "react-native"
-import Animated, {
-  interpolate,
-  useAnimatedScrollHandler,
-  useAnimatedStyle,
-  useSharedValue,
-} from "react-native-reanimated"
+import Animated, { interpolate, useAnimatedStyle, useSharedValue } from "react-native-reanimated"
 import { useSafeAreaFrame, useSafeAreaInsets } from "react-native-safe-area-context"
 
-import { ReAnimatedScrollView } from "@/src/components/common/AnimatedComponents"
 import { BlurEffect } from "@/src/components/common/BlurEffect"
 import {
   InternalNavigationHeader,
@@ -42,7 +39,6 @@ import type { NavigationControllerView } from "@/src/lib/navigation/types"
 import { toast } from "@/src/lib/toast"
 import { useShareSubscription } from "@/src/modules/settings/hooks/useShareSubscription"
 import { UserHeaderBanner } from "@/src/modules/settings/UserHeaderBanner"
-import { ItemSeparator } from "@/src/modules/subscription/ItemSeparator"
 import type { FeedModel } from "@/src/store/feed/types"
 import type { ListModel } from "@/src/store/list/store"
 import { useUser, useWhoami } from "@/src/store/user/hooks"
@@ -72,10 +68,6 @@ function ProfileScreenImpl(props: { userId: string }) {
   })
 
   const headerOpacity = useSharedValue(0)
-  const scrollHandler = useAnimatedScrollHandler((event) => {
-    scrollY.value = event.contentOffset.y
-    headerOpacity.value = scrollY.value / 100
-  })
 
   const user = useUser(props.userId)
   useEffect(() => {
@@ -98,6 +90,19 @@ function ProfileScreenImpl(props: { userId: string }) {
   const frame = useSafeAreaFrame()
   const headerHeight = getDefaultHeaderHeight(frame, false, 0)
 
+  const animatedScrollYRef = useRef(new RNAnimated.Value(0))
+
+  useEffect(() => {
+    const animatedScrollY = animatedScrollYRef.current
+    animatedScrollY.addListener(({ value }) => {
+      scrollY.value = value
+      headerOpacity.value = Math.min(value / 100, 1)
+    })
+    return () => {
+      animatedScrollY.removeAllListeners()
+    }
+  }, [headerOpacity, scrollY])
+
   return (
     <View className="bg-system-grouped-background flex-1">
       <Animated.View
@@ -115,16 +120,17 @@ function ProfileScreenImpl(props: { userId: string }) {
           }
         />
       </Animated.View>
-      <ReAnimatedScrollView
-        nestedScrollEnabled
-        onScroll={scrollHandler}
+      <ScrollView
+        animated
+        scrollEventThrottle={0}
+        animatedY={animatedScrollYRef}
         contentContainerStyle={{ paddingBottom: insets.bottom, paddingTop: headerHeight }}
       >
         <UserHeaderBanner scrollY={scrollY} userId={props.userId} />
 
         {isLoading && <ActivityIndicator className="mt-24" size={28} />}
         {!isLoading && subscriptions && <SubscriptionList subscriptions={subscriptions.data} />}
-      </ReAnimatedScrollView>
+      </ScrollView>
 
       <Animated.View
         style={useAnimatedStyle(() => ({
@@ -197,18 +203,29 @@ const SubscriptionList = ({ subscriptions }: { subscriptions: Subscription[] }) 
   }, [subscriptions])
 
   const hasFeeds = Object.keys(groupedFeeds).length > 0 || feeds.length > 0
+
+  const [isReady, setIsReady] = useState(false)
+  useEffect(() => {
+    setTimeout(() => {
+      setIsReady(true)
+    }, 1000)
+  }, [])
   return (
-    <View>
+    <View className={cn({ "opacity-0": !isReady })}>
       {lists.length > 0 && (
         <Fragment>
           <SectionHeader title="Lists" />
 
           <GroupedInsetListCard>
-            <FlatList
-              scrollEnabled={false}
+            <List
+              windowSize={1}
+              initialNumToRender={10}
+              recyclerBufferSize={100}
+              recyclerReservedBufferPerBatch={50}
               data={lists}
               renderItem={renderListItems}
-              ItemSeparatorComponent={ItemSeparator}
+              id="lists"
+              keyExtractor={defaultKeyExtractor}
             />
           </GroupedInsetListCard>
         </Fragment>
@@ -220,11 +237,13 @@ const SubscriptionList = ({ subscriptions }: { subscriptions: Subscription[] }) 
             <Fragment key={category}>
               <GroupedInsetListSectionHeader label={category} marginSize="small" />
               <GroupedInsetListCard>
-                <FlatList
-                  scrollEnabled={false}
+                <List
+                  windowSize={1}
                   data={feeds}
                   renderItem={renderFeedItems}
-                  ItemSeparatorComponent={ItemSeparator}
+                  // ItemSeparatorComponent={ItemSeparator}
+                  id={category}
+                  keyExtractor={defaultKeyExtractor}
                 />
               </GroupedInsetListCard>
             </Fragment>
@@ -232,11 +251,12 @@ const SubscriptionList = ({ subscriptions }: { subscriptions: Subscription[] }) 
 
           <GroupedInsetListSectionHeader label="Uncategorized Feeds" marginSize="small" />
           <GroupedInsetListCard>
-            <FlatList
-              scrollEnabled={false}
+            <List
+              keyExtractor={defaultKeyExtractor}
+              id="uncategorized-feeds"
               data={feeds}
               renderItem={renderFeedItems}
-              ItemSeparatorComponent={ItemSeparator}
+              // ItemSeparatorComponent={ItemSeparator}
             />
           </GroupedInsetListCard>
         </View>
@@ -298,3 +318,10 @@ const SectionHeader = ({ title }: { title: string }) => (
     </Text>
   </View>
 )
+
+const defaultKeyExtractor = (item: any) => {
+  if (typeof item === "string") {
+    return item
+  }
+  return "id" in item ? item.id : item.key
+}
